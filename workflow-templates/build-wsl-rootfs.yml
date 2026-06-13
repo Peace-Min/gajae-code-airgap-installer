@@ -1,0 +1,43 @@
+name: Build air-gapped WSL rootfs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "installer/build-wsl-rootfs.sh"
+      - ".github/workflows/build-wsl-rootfs.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Build tmux-ready rootfs
+        run: |
+          chmod +x installer/build-wsl-rootfs.sh
+          installer/build-wsl-rootfs.sh \
+            ubuntu:24.04 \
+            gajaecode-wsl-rootfs.tar
+
+      - name: Verify required commands
+        run: |
+          test -s gajaecode-wsl-rootfs.tar
+          test -s gajaecode-wsl-rootfs.tar.sha256
+          sha256sum --check gajaecode-wsl-rootfs.tar.sha256
+          docker import gajaecode-wsl-rootfs.tar gajaecode-wsl-rootfs:test
+          docker run --rm gajaecode-wsl-rootfs:test tmux -V
+          docker run --rm gajaecode-wsl-rootfs:test id gjc
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gajaecode-wsl-rootfs
+          path: |
+            gajaecode-wsl-rootfs.tar
+            gajaecode-wsl-rootfs.tar.sha256
+          if-no-files-found: error
+          retention-days: 30

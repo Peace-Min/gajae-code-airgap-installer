@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>GajaeCode-Airgap-Setup</AssemblyName>
+    <RootNamespace>GajaeCode.AirgapInstaller</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('payload/gjc-windows-x64.exe')">
+    <EmbeddedResource Include="payload/gjc-windows-x64.exe" LogicalName="GajaeCode.Payload" />
+    <EmbeddedResource Include="payload/gjc-windows-x64.exe.sha256" LogicalName="GajaeCode.PayloadHash" />
+    <EmbeddedResource Include="payload/deployment.json" LogicalName="GajaeCode.DeploymentSettings" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('payload/gjc-linux-x64')">
+    <EmbeddedResource Include="payload/gjc-linux-x64" LogicalName="GajaeCode.LinuxPayload" />
+    <EmbeddedResource Include="payload/gjc-linux-x64.sha256" LogicalName="GajaeCode.LinuxPayloadHash" />
+    <EmbeddedResource Include="payload/gajaecode-wsl-rootfs.tar" LogicalName="GajaeCode.WslRootfs" />
+    <EmbeddedResource Include="payload/gajaecode-wsl-rootfs.tar.sha256" LogicalName="GajaeCode.WslRootfsHash" />
+    <EmbeddedResource Include="payload/wsl_update_x64.msi" LogicalName="GajaeCode.WslKernelMsi" />
+    <EmbeddedResource Include="payload/wsl_update_x64.msi.sha256" LogicalName="GajaeCode.WslKernelMsiHash" />
+  </ItemGroup>
+</Project>

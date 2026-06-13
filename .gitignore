@@ -1,0 +1,9 @@
+installer/payload/
+installer/staging/
+installer/artifacts/
+installer/bin/
+installer/obj/
+LOCAL_DEPLOYMENT.md
+*.user
+*.suo
+
