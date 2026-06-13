@@ -6,4 +6,4 @@ installer/obj/
 LOCAL_DEPLOYMENT.md
 *.user
 *.suo
-
+release/assembled/

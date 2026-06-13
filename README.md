@@ -13,7 +13,27 @@ air-gapped environment with:
 - JSON evidence and a self-contained HTML report.
 
 This repository does not contain private gateway addresses, API keys, GJC
-binaries, a WSL root filesystem, or the final deployment EXE.
+binaries, or an API key. The `release/parts` directory contains a split copy
+of the deployment installer so it remains under GitHub's per-file limit.
+
+## Clone and install
+
+On the target PC:
+
+```powershell
+git clone https://github.com/Peace-Min/gajae-code-airgap-installer.git
+cd gajae-code-airgap-installer
+.\install.cmd
+```
+
+`install.cmd`:
+
+1. joins the split installer files;
+2. verifies the final SHA-256;
+3. launches the installer with administrator privileges.
+
+Then enter the server-issued API key and continue through the WSL2/tmux
+installation.
 
 ## Build inputs
 
@@ -45,7 +65,13 @@ installer\artifacts\SHA256SUMS.txt
 ```
 
 The output contains private build-time deployment settings. Do not upload it
-to a public release.
+as one public file. To update the split deployment payload:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\split-installer.ps1 `
+  -Installer .\installer\artifacts\GajaeCode-Airgap-Setup.exe
+```
 
 The rootfs workflow is stored at
 `workflow-templates/build-wsl-rootfs.yml`. Move it to
