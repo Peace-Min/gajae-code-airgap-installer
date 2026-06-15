@@ -43,6 +43,17 @@ validated WSL2/tmux environment for live team mode.
   single-instance (two cmd windows previously collided with "Move-Item: file
   already exists"), and the part-join and final replace retry on transient
   antivirus locks.
+- Added an unattended installer (`install-auto.cmd` + `scripts/auto-install.ps1`)
+  for environments where an antivirus exclusion is unavailable or ineffective
+  (e.g. policy-managed AhnLab V3 that ignores a local folder exclusion). It
+  self-elevates, reads the API key once into `GJC_INTERNAL_API_KEY` (never an
+  argument), assembles+verifies the exe, then drives the existing installer
+  non-interactively via `--resume-wsl`, watching `latest-install-state.json`
+  and retrying the whole run on a transient lock. Works with the current exe
+  (no rebuild). The interactive `install.cmd` flow is unchanged.
+- Korean-containing PowerShell scripts are now saved as UTF-8 with BOM so
+  Windows PowerShell 5.1 (which reads BOM-less files as the ANSI codepage)
+  parses and prints them correctly on the Korean target.
 
 ## Current files
 
