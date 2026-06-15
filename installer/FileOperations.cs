@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace GajaeCode.AirgapInstaller;
 
 internal static class FileOperations
@@ -13,6 +15,33 @@ internal static class FileOperations
     public static void DeleteWithRetry(string path)
     {
         RunWithLockRetry(() => File.Delete(path));
+    }
+
+    public static void CopyReplacingWithRetry(string sourcePath, string destinationPath)
+    {
+        RunWithLockRetry(() => File.Copy(sourcePath, destinationPath, true));
+    }
+
+    public static void WriteAllTextReplacingWithRetry(string path, string contents, Encoding encoding)
+    {
+        var temporaryPath = $"{path}.new-{Guid.NewGuid():N}";
+        try
+        {
+            RunWithLockRetry(() => File.WriteAllText(temporaryPath, contents, encoding));
+            MoveReplacingWithRetry(temporaryPath, path);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                DeleteWithRetry(temporaryPath);
+            }
+        }
+    }
+
+    public static void AppendAllTextWithRetry(string path, string contents, Encoding encoding)
+    {
+        RunWithLockRetry(() => File.AppendAllText(path, contents, encoding));
     }
 
     private static void RunWithLockRetry(Action operation)

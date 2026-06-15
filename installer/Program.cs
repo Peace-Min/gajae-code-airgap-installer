@@ -10,15 +10,47 @@ namespace GajaeCode.AirgapInstaller;
 
 internal static class Program
 {
+    private const string InstallerMutexName = @"Local\GajaeCodeAirgapInstaller";
     public static bool ResumeWslRequested { get; private set; }
 
     [STAThread]
     private static void Main()
     {
-        ResumeWslRequested = Environment.GetCommandLineArgs()
-            .Any(argument => argument.Equals("--resume-wsl", StringComparison.OrdinalIgnoreCase));
-        ApplicationConfiguration.Initialize();
-        Application.Run(new InstallerForm());
+        using var mutex = new Mutex(false, InstallerMutexName);
+        var ownsMutex = false;
+        try
+        {
+            try
+            {
+                ownsMutex = mutex.WaitOne(0);
+            }
+            catch (AbandonedMutexException)
+            {
+                ownsMutex = true;
+            }
+
+            if (!ownsMutex)
+            {
+                MessageBox.Show(
+                    "가재코드 설치 프로그램이 이미 실행 중입니다.",
+                    "중복 실행",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            ResumeWslRequested = Environment.GetCommandLineArgs()
+                .Any(argument => argument.Equals("--resume-wsl", StringComparison.OrdinalIgnoreCase));
+            ApplicationConfiguration.Initialize();
+            Application.Run(new InstallerForm());
+        }
+        finally
+        {
+            if (ownsMutex)
+            {
+                mutex.ReleaseMutex();
+            }
+        }
     }
 }
 
@@ -30,6 +62,7 @@ internal sealed class InstallerForm : Form
     private string? _statePath;
     private string _currentStage = "not-started";
     private string _activeApiKey = string.Empty;
+    private bool _installationRunning;
 
     private readonly TextBox _apiKey = new()
     {
@@ -124,6 +157,21 @@ internal sealed class InstallerForm : Form
         Controls.Add(layout);
 
         _installButton.Click += async (_, _) => await InstallAsync();
+        FormClosing += (_, eventArgs) =>
+        {
+            if (!_installationRunning)
+            {
+                return;
+            }
+
+            eventArgs.Cancel = true;
+            MessageBox.Show(
+                this,
+                "설치 작업이 진행 중입니다. 현재 단계가 완료될 때까지 창을 닫지 마십시오.",
+                "설치 진행 중",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        };
         Shown += async (_, _) =>
         {
             if (Program.ResumeWslRequested)
@@ -150,7 +198,19 @@ internal sealed class InstallerForm : Form
             _apiKey.Focus();
             return;
         }
+        if (apiKey.Length < 8)
+        {
+            MessageBox.Show(
+                this,
+                "API Key가 너무 짧습니다. 서버에서 발급된 전체 키를 입력하십시오.",
+                "입력 확인",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            _apiKey.Focus();
+            return;
+        }
 
+        _installationRunning = true;
         _installButton.Enabled = false;
         _apiKey.Enabled = false;
         _status.Clear();
@@ -166,7 +226,7 @@ internal sealed class InstallerForm : Form
             SetStage("initialize", "running");
             Log("설치를 시작합니다.");
 
-            var bashPath = FindGitBash();
+            var bashPath = SystemPrerequisites.FindGitBash();
             if (bashPath is null)
             {
                 throw new InvalidOperationException(
@@ -175,13 +235,17 @@ internal sealed class InstallerForm : Form
             Log($"Git Bash 확인: {bashPath}");
 
             SetStage("install-binary", "running");
+            EnsureGjcNotRunning(paths.BinaryPath);
             ExtractAndVerifyBinary(paths.BinaryPath);
             Log($"GJC 설치: {paths.BinaryPath}");
 
             SetStage("configure-credentials", "running");
-            SetUserEnvironmentVariable(ApiKeyEnvironmentVariable, apiKey);
+            Environment.SetEnvironmentVariable(
+                ApiKeyEnvironmentVariable,
+                apiKey,
+                EnvironmentVariableTarget.Process);
             AddDirectoryToUserPath(paths.InstallDirectory);
-            Log($"사용자 환경변수 등록: {ApiKeyEnvironmentVariable}");
+            Log("설치 프로세스용 인증 정보를 준비했습니다.");
 
             SetStage("write-config", "running");
             WriteManagedConfiguration(paths, bashPath, _deployment);
@@ -220,6 +284,13 @@ internal sealed class InstallerForm : Form
             }
 
             Log("GJC 모델 호출 검증 성공.");
+
+            SetStage("persist-credentials", "running");
+            Environment.SetEnvironmentVariable(
+                ApiKeyEnvironmentVariable,
+                apiKey,
+                EnvironmentVariableTarget.User);
+            Log($"사용자 환경변수 등록: {ApiKeyEnvironmentVariable}");
 
             if (_installWslTmux.Checked)
             {
@@ -281,13 +352,22 @@ internal sealed class InstallerForm : Form
         {
             Log($"오류: {exception.Message}");
             LogDiagnosticException(exception);
-            SetStage(_currentStage, "failed", exception.Message);
+            try
+            {
+                SetStage(_currentStage, "failed", exception.Message);
+            }
+            catch (Exception stateException) when (
+                stateException is IOException or UnauthorizedAccessException)
+            {
+                Log($"진단 상태 파일 기록 실패: {stateException.Message}");
+            }
             MessageBox.Show(this,
                 $"설정이 완료되지 않았습니다.\r\n\r\n{exception.Message}\r\n\r\n진단 경로: {_logPath ?? "생성 전 실패"}\r\n\r\n입력한 API Key는 화면이나 로그에 출력되지 않았습니다.",
                 "설치 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
+            _installationRunning = false;
             _activeApiKey = string.Empty;
             _apiKey.Clear();
             _apiKey.Enabled = true;
@@ -328,20 +408,34 @@ internal sealed class InstallerForm : Form
         FileOperations.MoveReplacingWithRetry(temporaryPath, destinationPath);
     }
 
-    private static void SetUserEnvironmentVariable(string name, string value)
+    private static void EnsureGjcNotRunning(string binaryPath)
     {
-        Environment.SetEnvironmentVariable(name, value, EnvironmentVariableTarget.User);
-        Environment.SetEnvironmentVariable(name, value, EnvironmentVariableTarget.Process);
+        foreach (var process in Process.GetProcessesByName("gjc"))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.MainModule?.FileName is { } processPath &&
+                        SystemPrerequisites.PathsEqual(processPath, binaryPath))
+                    {
+                        throw new InvalidOperationException(
+                            "실행 중인 GJC가 있습니다. 모든 GJC 창과 프로세스를 종료한 뒤 설치를 다시 실행하십시오.");
+                    }
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    // An unrelated elevated process with the same name is ignored.
+                }
+            }
+        }
     }
 
     private static void AddDirectoryToUserPath(string directory)
     {
         var current = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? string.Empty;
         var entries = current.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (!entries.Any(entry => string.Equals(
-                Path.GetFullPath(entry.TrimEnd('\\')),
-                Path.GetFullPath(directory.TrimEnd('\\')),
-                StringComparison.OrdinalIgnoreCase)))
+        if (!entries.Any(entry => SystemPrerequisites.PathsEqual(entry, directory)))
         {
             var updated = string.IsNullOrWhiteSpace(current)
                 ? directory
@@ -351,24 +445,10 @@ internal sealed class InstallerForm : Form
 
         var processPath = Environment.GetEnvironmentVariable("Path") ?? string.Empty;
         if (!processPath.Split(';', StringSplitOptions.RemoveEmptyEntries)
-                .Any(entry => string.Equals(entry.TrimEnd('\\'), directory.TrimEnd('\\'),
-                    StringComparison.OrdinalIgnoreCase)))
+                .Any(entry => SystemPrerequisites.PathsEqual(entry, directory)))
         {
             Environment.SetEnvironmentVariable("Path", $"{processPath.TrimEnd(';')};{directory}");
         }
-    }
-
-    private static string? FindGitBash()
-    {
-        var candidates = new List<string>
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Git", "bin", "bash.exe"),
-        };
-        var pathEntries = (Environment.GetEnvironmentVariable("Path") ?? string.Empty)
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        candidates.AddRange(pathEntries.Select(entry => Path.Combine(entry, "bash.exe")));
-        return candidates.FirstOrDefault(File.Exists);
     }
 
     private static void WriteManagedConfiguration(
@@ -424,6 +504,14 @@ internal sealed class InstallerForm : Form
               enabled: false
             completion:
               notify: on
+            task:
+              eager: false
+              maxConcurrency: 2
+              maxRecursionDepth: 1
+              maxRuntimeMs: 1800000
+              enableLsp: false
+              forkContext:
+                enabled: false
             retry:
               requestMaxRetries: 4
               streamMaxRetries: 20
@@ -431,8 +519,14 @@ internal sealed class InstallerForm : Form
               maxDelayMs: 30000
             """;
 
-        File.WriteAllText(paths.ModelsPath, NormalizeNewLines(modelsYaml), new UTF8Encoding(false));
-        File.WriteAllText(paths.ConfigPath, NormalizeNewLines(configYaml), new UTF8Encoding(false));
+        FileOperations.WriteAllTextReplacingWithRetry(
+            paths.ModelsPath,
+            NormalizeNewLines(modelsYaml),
+            new UTF8Encoding(false));
+        FileOperations.WriteAllTextReplacingWithRetry(
+            paths.ConfigPath,
+            NormalizeNewLines(configYaml),
+            new UTF8Encoding(false));
     }
 
     private static void BackupIfPresent(string path)
@@ -442,8 +536,15 @@ internal sealed class InstallerForm : Form
             return;
         }
 
-        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        File.Copy(path, $"{path}.backup-{timestamp}", false);
+        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
+        var backupPath = $"{path}.backup-{timestamp}";
+        var suffix = 0;
+        while (File.Exists(backupPath))
+        {
+            suffix++;
+            backupPath = $"{path}.backup-{timestamp}-{suffix}";
+        }
+        FileOperations.CopyReplacingWithRetry(path, backupPath);
     }
 
     private static string EscapeYamlDoubleQuoted(string value) =>
@@ -533,13 +634,24 @@ internal sealed class InstallerForm : Form
         _status.AppendText($"{line}{Environment.NewLine}");
         if (_logPath is not null)
         {
-            File.AppendAllText(_logPath, $"{line}{Environment.NewLine}", new UTF8Encoding(false));
+            try
+            {
+                FileOperations.AppendAllTextWithRetry(
+                    _logPath,
+                    $"{line}{Environment.NewLine}",
+                    new UTF8Encoding(false));
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                // A diagnostics lock must not replace the installation result.
+            }
         }
     }
 
     private void InitializeDiagnostics(InstallPaths paths)
     {
-        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
         _logPath = Path.Combine(paths.DiagnosticsDirectory, $"install-{timestamp}.log");
         _statePath = Path.Combine(paths.DiagnosticsDirectory, "latest-install-state.json");
 
@@ -568,7 +680,10 @@ internal sealed class InstallerForm : Form
 
             The API key value is intentionally absent from all diagnostic artifacts.
             """;
-        File.WriteAllText(recoveryPath, NormalizeNewLines(recovery), new UTF8Encoding(false));
+        FileOperations.WriteAllTextReplacingWithRetry(
+            recoveryPath,
+            NormalizeNewLines(recovery),
+            new UTF8Encoding(false));
     }
 
     private void SetStage(string stage, string status, string? error = null)
@@ -595,9 +710,10 @@ internal sealed class InstallerForm : Form
             gitBashRequired = true,
         };
         var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        var temporaryPath = _statePath + ".new";
-        File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
-        File.Move(temporaryPath, _statePath, true);
+        FileOperations.WriteAllTextReplacingWithRetry(
+            _statePath,
+            json,
+            new UTF8Encoding(false));
     }
 
     private void LogDiagnosticException(Exception exception)
@@ -608,10 +724,18 @@ internal sealed class InstallerForm : Form
         }
 
         var detail = Redact(exception.ToString());
-        File.AppendAllText(
-            _logPath,
-            $"{Environment.NewLine}--- exception detail ---{Environment.NewLine}{detail}{Environment.NewLine}",
-            new UTF8Encoding(false));
+        try
+        {
+            FileOperations.AppendAllTextWithRetry(
+                _logPath,
+                $"{Environment.NewLine}--- exception detail ---{Environment.NewLine}{detail}{Environment.NewLine}",
+                new UTF8Encoding(false));
+        }
+        catch (Exception diagnosticsException) when (
+            diagnosticsException is IOException or UnauthorizedAccessException)
+        {
+            // The message box and state file still retain the sanitized failure.
+        }
     }
 
     private string Redact(string value)
@@ -622,7 +746,7 @@ internal sealed class InstallerForm : Form
             redacted = redacted.Replace(_activeApiKey, "[REDACTED]", StringComparison.Ordinal);
         }
         var storedKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
-        if (!string.IsNullOrEmpty(storedKey))
+        if (!string.IsNullOrEmpty(storedKey) && storedKey.Length >= 8)
         {
             redacted = redacted.Replace(storedKey, "[REDACTED]", StringComparison.Ordinal);
         }

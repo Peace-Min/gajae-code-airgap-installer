@@ -81,8 +81,14 @@ internal sealed class VerificationRunner
             checks);
 
         var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(paths.JsonPath, json, new UTF8Encoding(false));
-        File.WriteAllText(paths.HtmlPath, RenderHtml(summary), new UTF8Encoding(false));
+        FileOperations.WriteAllTextReplacingWithRetry(
+            paths.JsonPath,
+            json,
+            new UTF8Encoding(false));
+        FileOperations.WriteAllTextReplacingWithRetry(
+            paths.HtmlPath,
+            RenderHtml(summary),
+            new UTF8Encoding(false));
         _log($"검증 JSON: {paths.JsonPath}");
         _log($"검증 HTML: {paths.HtmlPath}");
         return summary;
@@ -211,6 +217,8 @@ internal sealed class VerificationRunner
                      models.Contains($"apiKeyEnv: \"{ApiKeyEnvironmentVariable}\"", StringComparison.Ordinal) &&
                      config.Contains("checkUpdate: false", StringComparison.Ordinal) &&
                      config.Contains("autoUpdate: off", StringComparison.Ordinal) &&
+                     config.Contains("maxConcurrency: 2", StringComparison.Ordinal) &&
+                     config.Contains("maxRecursionDepth: 1", StringComparison.Ordinal) &&
                      Count(config, "enabled: false") >= 3 &&
                      noSecret;
         return new VerificationCheck(
@@ -225,12 +233,8 @@ internal sealed class VerificationRunner
 
     private static VerificationCheck CheckGitBash()
     {
-        var path = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "Git",
-            "bin",
-            "bash.exe");
-        return File.Exists(path)
+        var path = SystemPrerequisites.FindGitBash();
+        return path is not null
             ? new VerificationCheck("Git Bash", "passed", path, 0, null)
             : new VerificationCheck("Git Bash", "failed", "Git Bash was not found.", null, null);
     }

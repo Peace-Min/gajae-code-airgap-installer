@@ -52,27 +52,35 @@ internal sealed class WslOfflineInstaller
             return new WslInstallResult(true, false, "Windows 기능 활성화를 완료하려면 재부팅이 필요합니다.");
         }
 
-        var kernelResult = await RunProcessAsync(
-            "msiexec.exe",
-            ["/i", paths.KernelMsiPath, "/qn", "/norestart"],
-            null,
-            TimeSpan.FromMinutes(5));
-        if (kernelResult.ExitCode is not (0 or 3010 or 1641))
+        if (!await HasModernWslAsync())
         {
-            throw new InvalidOperationException(
-                $"WSL2 커널 MSI 설치 실패 (exit {kernelResult.ExitCode}): {kernelResult.CombinedOutput}");
+            var kernelResult = await RunProcessAsync(
+                "msiexec.exe",
+                ["/i", paths.KernelMsiPath, "/qn", "/norestart"],
+                null,
+                TimeSpan.FromMinutes(5));
+            if (kernelResult.ExitCode is not (0 or 3010 or 1641))
+            {
+                throw new InvalidOperationException(
+                    $"WSL2 커널 MSI 설치 실패 (exit {kernelResult.ExitCode}): {kernelResult.CombinedOutput}");
+            }
+            if (kernelResult.ExitCode is 3010 or 1641)
+            {
+                ScheduleResume(paths);
+                return new WslInstallResult(true, false, "WSL2 커널 설치를 완료하려면 재부팅이 필요합니다.");
+            }
         }
-        if (kernelResult.ExitCode is 3010 or 1641)
+        else
         {
-            ScheduleResume(paths);
-            return new WslInstallResult(true, false, "WSL2 커널 설치를 완료하려면 재부팅이 필요합니다.");
+            _log("설치된 최신 WSL을 확인해 레거시 커널 MSI 적용을 건너뜁니다.");
         }
 
         var defaultVersion = await RunProcessAsync(
             "wsl.exe",
             ["--set-default-version", "2"],
             null,
-            TimeSpan.FromMinutes(1));
+            TimeSpan.FromMinutes(1),
+            Encoding.Unicode);
         if (defaultVersion.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -86,7 +94,8 @@ internal sealed class WslOfflineInstaller
                 "wsl.exe",
                 ["--import", DistroName, paths.DistroDirectory, paths.RootfsPath, "--version", "2"],
                 null,
-                TimeSpan.FromMinutes(10));
+                TimeSpan.FromMinutes(10),
+                Encoding.Unicode);
             if (importResult.ExitCode != 0)
             {
                 throw new InvalidOperationException(
@@ -166,8 +175,7 @@ internal sealed class WslOfflineInstaller
         }
 
         _log($"Windows 기능 확인: {featureName} (exit {result.ExitCode})");
-        return result.ExitCode is 3010 or 1641 ||
-               result.CombinedOutput.Contains("restart", StringComparison.OrdinalIgnoreCase);
+        return result.ExitCode is 3010 or 1641;
     }
 
     private static async Task<bool> DistroExistsAsync()
@@ -176,12 +184,24 @@ internal sealed class WslOfflineInstaller
             "wsl.exe",
             ["--list", "--quiet"],
             null,
-            TimeSpan.FromMinutes(1));
+            TimeSpan.FromMinutes(1),
+            Encoding.Unicode);
         return result.ExitCode == 0 &&
                result.StandardOutput.Split(
                        ['\r', '\n', '\0'],
                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                    .Any(line => line.Equals(DistroName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task<bool> HasModernWslAsync()
+    {
+        var result = await RunProcessAsync(
+            "wsl.exe",
+            ["--version"],
+            null,
+            TimeSpan.FromMinutes(1),
+            Encoding.Unicode);
+        return result.ExitCode == 0;
     }
 
     private void ExtractResource(string resourceName, string hashResourceName, string destinationPath)
@@ -321,7 +341,10 @@ internal sealed class WslOfflineInstaller
             su - gjc -c 'source ~/.config/gajae-code/env && gjc setup defaults --force'
             tmux -V
             """;
-        File.WriteAllText(path, script.Replace("\r\n", "\n"), new UTF8Encoding(false));
+        FileOperations.WriteAllTextReplacingWithRetry(
+            path,
+            script.Replace("\r\n", "\n"),
+            new UTF8Encoding(false));
     }
 
     private static void CreateLaunchers(WslPaths paths)
@@ -337,14 +360,17 @@ internal sealed class WslOfflineInstaller
               start "" wsl.exe -d GajaeCode -- bash -lc "exec gjc-tmux"
             )
             """;
-        File.WriteAllText(launcherPath, launcher.Replace("\n", "\r\n"), Encoding.ASCII);
+        FileOperations.WriteAllTextReplacingWithRetry(
+            launcherPath,
+            launcher.Replace("\n", "\r\n"),
+            Encoding.ASCII);
 
         var logsPath = Path.Combine(desktop, "GajaeCode diagnostics.cmd");
         var diagnostics = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "GajaeCode",
             "diagnostics");
-        File.WriteAllText(
+        FileOperations.WriteAllTextReplacingWithRetry(
             logsPath,
             $"@echo off\r\nstart \"\" explorer.exe \"{diagnostics}\"\r\n",
             Encoding.ASCII);
@@ -355,7 +381,10 @@ internal sealed class WslOfflineInstaller
         var currentExecutable = Environment.ProcessPath
             ?? throw new InvalidOperationException("현재 설치기 실행 경로를 확인할 수 없습니다.");
         var stableExecutable = Path.Combine(paths.InstallerDirectory, "GajaeCode-Airgap-Setup.exe");
-        File.Copy(currentExecutable, stableExecutable, true);
+        if (!SystemPrerequisites.PathsEqual(currentExecutable, stableExecutable))
+        {
+            FileOperations.CopyReplacingWithRetry(currentExecutable, stableExecutable);
+        }
         using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\RunOnce");
         key.SetValue(RunOnceName, $"\"{stableExecutable}\" --resume-wsl", RegistryValueKind.String);
     }
@@ -372,7 +401,8 @@ internal sealed class WslOfflineInstaller
         string executable,
         IReadOnlyList<string> arguments,
         string? standardInput,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        Encoding? redirectedOutputEncoding = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -383,6 +413,11 @@ internal sealed class WslOfflineInstaller
             RedirectStandardInput = standardInput is not null,
             CreateNoWindow = true,
         };
+        if (redirectedOutputEncoding is not null)
+        {
+            startInfo.StandardOutputEncoding = redirectedOutputEncoding;
+            startInfo.StandardErrorEncoding = redirectedOutputEncoding;
+        }
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);

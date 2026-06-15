@@ -123,11 +123,11 @@ release\assembled\GajaeCodeAirgapSetup.exe
 ## 배포 파일 정보
 
 - 분할 파일 수: 12개
-- 전체 설치 파일 크기: 922,435,609 bytes
+- 전체 설치 파일 크기: 922,439,705 bytes
 - 전체 설치 파일 SHA-256:
 
 ```text
-90909fd9c3df84e5f8ec3b4b8aaf854d713e4d65195fcf1586a21218432a6224
+49b3c887f437e20154c0d2b52d32134fea2037586a4b8cadbeea31e55f56f467
 ```
 
 ## 유지보수 및 재빌드
