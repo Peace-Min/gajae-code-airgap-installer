@@ -299,30 +299,79 @@ internal sealed class InstallerForm : Form
     private void ExtractAndVerifyBinary(string destinationPath)
     {
         var assembly = Assembly.GetExecutingAssembly();
-        using var payload = assembly.GetManifestResourceStream("GajaeCode.Payload")
-            ?? throw new InvalidOperationException(
-                "설치기 안에 GJC 바이너리가 없습니다. build.ps1로 설치기를 다시 생성하십시오.");
         using var expectedHashStream = assembly.GetManifestResourceStream("GajaeCode.PayloadHash")
             ?? throw new InvalidOperationException("설치기 안에 GJC 체크섬이 없습니다.");
         using var hashReader = new StreamReader(expectedHashStream, Encoding.ASCII);
         var expectedHash = hashReader.ReadToEnd().Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
         var temporaryPath = destinationPath + ".new";
-        using (var output = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            payload.CopyTo(output);
-        }
 
-        using var file = File.OpenRead(temporaryPath);
-        var actualHash = Convert.ToHexString(SHA256.HashData(file));
+        // Real-time antivirus (AhnLab V3, Windows Defender, etc.) opens a freshly
+        // written executable to scan it, briefly locking the file. Each file-system
+        // step is retried on a sharing/lock violation so an in-progress scan only
+        // delays the install instead of aborting it.
+        RunWithFileRetry(() =>
+        {
+            using var payload = assembly.GetManifestResourceStream("GajaeCode.Payload")
+                ?? throw new InvalidOperationException(
+                    "설치기 안에 GJC 바이너리가 없습니다. build.ps1로 설치기를 다시 생성하십시오.");
+            using var output = new FileStream(
+                temporaryPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            payload.CopyTo(output);
+        });
+
+        var actualHash = string.Empty;
+        RunWithFileRetry(() =>
+        {
+            using var file = new FileStream(
+                temporaryPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            actualHash = Convert.ToHexString(SHA256.HashData(file));
+        });
         if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(temporaryPath);
+            RunWithFileRetry(() => File.Delete(temporaryPath));
             throw new InvalidOperationException("내장 GJC 바이너리 SHA-256 검증에 실패했습니다.");
         }
 
-        File.Move(temporaryPath, destinationPath, true);
+        RunWithFileRetry(() => File.Move(temporaryPath, destinationPath, true));
     }
+
+    /// <summary>
+    /// Runs a file-system operation, retrying with exponential backoff when a
+    /// security product transiently locks a file (sharing/lock violation or a
+    /// momentary access denial). Genuine "missing file/directory" errors are not
+    /// retried. Keeps the installer reliable regardless of the antivirus in use.
+    /// </summary>
+    private static void RunWithFileRetry(Action operation)
+    {
+        const int maxAttempts = 12;
+        var delay = TimeSpan.FromMilliseconds(100);
+        var maxDelay = TimeSpan.FromSeconds(2);
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                operation();
+                return;
+            }
+            catch (Exception exception) when (attempt < maxAttempts && IsTransientFileLock(exception))
+            {
+                Thread.Sleep(delay);
+                delay = TimeSpan.FromMilliseconds(
+                    Math.Min(delay.TotalMilliseconds * 2, maxDelay.TotalMilliseconds));
+            }
+        }
+    }
+
+    private static bool IsTransientFileLock(Exception exception) => exception switch
+    {
+        FileNotFoundException => false,
+        DirectoryNotFoundException => false,
+        UnauthorizedAccessException => true,
+        IOException => true,
+        _ => false,
+    };
 
     private static void SetUserEnvironmentVariable(string name, string value)
     {
@@ -427,8 +476,10 @@ internal sealed class InstallerForm : Form
               maxDelayMs: 30000
             """;
 
-        File.WriteAllText(paths.ModelsPath, NormalizeNewLines(modelsYaml), new UTF8Encoding(false));
-        File.WriteAllText(paths.ConfigPath, NormalizeNewLines(configYaml), new UTF8Encoding(false));
+        RunWithFileRetry(() =>
+            File.WriteAllText(paths.ModelsPath, NormalizeNewLines(modelsYaml), new UTF8Encoding(false)));
+        RunWithFileRetry(() =>
+            File.WriteAllText(paths.ConfigPath, NormalizeNewLines(configYaml), new UTF8Encoding(false)));
     }
 
     private static void BackupIfPresent(string path)
@@ -439,7 +490,7 @@ internal sealed class InstallerForm : Form
         }
 
         var timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        File.Copy(path, $"{path}.backup-{timestamp}", false);
+        RunWithFileRetry(() => File.Copy(path, $"{path}.backup-{timestamp}", false));
     }
 
     private static string EscapeYamlDoubleQuoted(string value) =>
@@ -529,7 +580,21 @@ internal sealed class InstallerForm : Form
         _status.AppendText($"{line}{Environment.NewLine}");
         if (_logPath is not null)
         {
-            File.AppendAllText(_logPath, $"{line}{Environment.NewLine}", new UTF8Encoding(false));
+            TryAppendDiagnostics(_logPath, $"{line}{Environment.NewLine}");
+        }
+    }
+
+    // Diagnostics logging is best-effort: it is retried on a transient antivirus
+    // lock, but a persistent failure is swallowed so logging can never abort the
+    // installation (Log runs even inside the failure handler).
+    private static void TryAppendDiagnostics(string path, string text)
+    {
+        try
+        {
+            RunWithFileRetry(() => File.AppendAllText(path, text, new UTF8Encoding(false)));
+        }
+        catch (Exception exception) when (IsTransientFileLock(exception))
+        {
         }
     }
 
@@ -564,7 +629,8 @@ internal sealed class InstallerForm : Form
 
             The API key value is intentionally absent from all diagnostic artifacts.
             """;
-        File.WriteAllText(recoveryPath, NormalizeNewLines(recovery), new UTF8Encoding(false));
+        RunWithFileRetry(() =>
+            File.WriteAllText(recoveryPath, NormalizeNewLines(recovery), new UTF8Encoding(false)));
     }
 
     private void SetStage(string stage, string status, string? error = null)
@@ -592,8 +658,14 @@ internal sealed class InstallerForm : Form
         };
         var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
         var temporaryPath = _statePath + ".new";
-        File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
-        File.Move(temporaryPath, _statePath, true);
+
+        // Atomic replacement, retried so an antivirus scan of the new state file
+        // cannot abort the install at a stage boundary.
+        RunWithFileRetry(() =>
+        {
+            File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
+            File.Move(temporaryPath, _statePath, true);
+        });
     }
 
     private void LogDiagnosticException(Exception exception)
@@ -604,10 +676,9 @@ internal sealed class InstallerForm : Form
         }
 
         var detail = Redact(exception.ToString());
-        File.AppendAllText(
+        TryAppendDiagnostics(
             _logPath,
-            $"{Environment.NewLine}--- exception detail ---{Environment.NewLine}{detail}{Environment.NewLine}",
-            new UTF8Encoding(false));
+            $"{Environment.NewLine}--- exception detail ---{Environment.NewLine}{detail}{Environment.NewLine}");
     }
 
     private string Redact(string value)

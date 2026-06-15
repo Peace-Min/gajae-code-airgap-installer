@@ -1,6 +1,6 @@
 # Air-Gapped Deployment Handoff
 
-Last updated: 2026-06-13
+Last updated: 2026-06-15
 
 ## Objective
 
@@ -31,6 +31,18 @@ validated WSL2/tmux environment for live team mode.
   the ignored local staging directory.
 - Added the overall deployment plan.
 - Installer project builds successfully in Release mode.
+- Made every installer file write antivirus-safe (branch `fix/av-safe-install`).
+  Field reports showed `ExtractAndVerifyBinary` failing at
+  `File.Move(gjc.exe.new -> gjc.exe)` with "The process cannot access the file
+  because it is being used by another process" because AhnLab V3 real-time scan
+  locks the freshly written executable. Added `RunWithFileRetry` (exponential
+  backoff on sharing/lock violations, max ~15s) around the binary extract/move,
+  config writes, config backups, atomic state replacement, and the recovery
+  file; diagnostics logging is now best-effort and never aborts the install.
+- Hardened `scripts/assemble-installer.ps1`: a process mutex makes assembly
+  single-instance (two cmd windows previously collided with "Move-Item: file
+  already exists"), and the part-join and final replace retry on transient
+  antivirus locks.
 
 ## Current files
 
@@ -49,7 +61,15 @@ validated WSL2/tmux environment for live team mode.
 4. Test clean install, reinstall, partial failure, rollback, and reboot resume
    on Windows 10 Pro 19045.
 5. Produce the final signed EXE, checksum, build metadata, licenses, and
-   immutable internal Git release.
+   immutable internal Git release. Code-signing `gjc.exe` is strongly
+   recommended: a signed binary is far less likely to be quarantined or locked
+   by endpoint security than an unsigned one.
+6. Rebuild required for the antivirus retry fix to reach clients: re-run
+   `installer/build.ps1` (re-embeds `gjc.exe`), then `scripts/split-installer.ps1`
+   to regenerate `release/parts/*` and `release/SHA256SUMS.txt`. The
+   `assemble-installer.ps1` change is interpreted and takes effect immediately.
+7. Apply the same `RunWithFileRetry` pattern to `WslOfflineInstaller.cs` so the
+   WSL rootfs/MSI extraction is equally resilient to real-time scanning.
 
 ## Diagnostic contract
 
