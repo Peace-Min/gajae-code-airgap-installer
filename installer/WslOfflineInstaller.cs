@@ -199,14 +199,19 @@ internal sealed class WslOfflineInstaller
         {
             payload.CopyTo(output);
         }
-        using var input = File.OpenRead(temporaryPath);
-        var actualHash = Convert.ToHexString(SHA256.HashData(input));
+        string actualHash;
+        using (var input = File.OpenRead(temporaryPath))
+        {
+            actualHash = Convert.ToHexString(SHA256.HashData(input));
+        }
+
         if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(temporaryPath);
+            FileOperations.DeleteWithRetry(temporaryPath);
             throw new InvalidOperationException($"{resourceName} SHA-256 검증에 실패했습니다.");
         }
-        File.Move(temporaryPath, destinationPath, true);
+
+        FileOperations.MoveReplacingWithRetry(temporaryPath, destinationPath);
     }
 
     private static void WriteConfigureScript(string path)

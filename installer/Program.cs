@@ -313,15 +313,19 @@ internal sealed class InstallerForm : Form
             payload.CopyTo(output);
         }
 
-        using var file = File.OpenRead(temporaryPath);
-        var actualHash = Convert.ToHexString(SHA256.HashData(file));
+        string actualHash;
+        using (var file = File.OpenRead(temporaryPath))
+        {
+            actualHash = Convert.ToHexString(SHA256.HashData(file));
+        }
+
         if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(temporaryPath);
+            FileOperations.DeleteWithRetry(temporaryPath);
             throw new InvalidOperationException("내장 GJC 바이너리 SHA-256 검증에 실패했습니다.");
         }
 
-        File.Move(temporaryPath, destinationPath, true);
+        FileOperations.MoveReplacingWithRetry(temporaryPath, destinationPath);
     }
 
     private static void SetUserEnvironmentVariable(string name, string value)
