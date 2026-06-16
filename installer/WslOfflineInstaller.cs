@@ -87,7 +87,26 @@ internal sealed class WslOfflineInstaller
                 $"WSL2 기본 버전 설정 실패: {defaultVersion.CombinedOutput}");
         }
 
-        if (!await DistroExistsAsync())
+        var distroExists = await DistroExistsAsync();
+        if (distroExists && !await ExistingDistroHasRequiredToolsAsync())
+        {
+            _log("기존 GajaeCode WSL 배포판에 필수 런타임 도구가 부족해 새 배포판으로 재생성합니다.");
+            var unregisterResult = await RunProcessAsync(
+                "wsl.exe",
+                ["--unregister", DistroName],
+                null,
+                TimeSpan.FromMinutes(3),
+                Encoding.Unicode);
+            if (unregisterResult.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"기존 WSL 배포판 제거 실패: {unregisterResult.CombinedOutput}");
+            }
+
+            distroExists = false;
+        }
+
+        if (!distroExists)
         {
             _log("GajaeCode WSL2 배포판을 등록합니다.");
             var importResult = await RunProcessAsync(
@@ -203,6 +222,22 @@ internal sealed class WslOfflineInstaller
             null,
             TimeSpan.FromMinutes(1),
             Encoding.Unicode);
+        return result.ExitCode == 0;
+    }
+
+    private static async Task<bool> ExistingDistroHasRequiredToolsAsync()
+    {
+        var result = await RunProcessAsync(
+            "wsl.exe",
+            [
+                "-d", DistroName,
+                "-u", "root",
+                "--",
+                "bash", "-lc",
+                "command -v bash git rg tmux node npm python3 >/dev/null && python3 -m pip --version >/dev/null",
+            ],
+            null,
+            TimeSpan.FromMinutes(1));
         return result.ExitCode == 0;
     }
 

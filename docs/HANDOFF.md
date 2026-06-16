@@ -53,6 +53,9 @@ validated WSL2/tmux environment for live team mode.
 - Rebuilt the bundled WSL rootfs with `python3`, `python3-pip`, `nodejs`, and
   `npm`, and verified those tools inside the temporary WSL build distro before
   export.
+- Added reinstall repair for the managed `GajaeCode` WSL distro: a healthy
+  distro is reused, but an older distro missing required runtime tools is
+  unregistered and imported again from the bundled rootfs.
 
 ## Current files
 

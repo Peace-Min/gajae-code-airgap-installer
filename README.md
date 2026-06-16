@@ -127,7 +127,7 @@ release\assembled\GajaeCodeAirgapSetup.exe
 - 전체 설치 파일 SHA-256:
 
 ```text
-376cfafce9a14f22d29bd7c66efe8b43cf38290971a2425b4c87c8987a365e39
+5af06bcd16536c39eba7f426823038ac4c4c8e99435f6b07b7f76c14c7607cef
 ```
 
 ## 유지보수 및 재빌드
