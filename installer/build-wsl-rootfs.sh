@@ -17,7 +17,7 @@ docker exec "$container" bash -lc '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y --no-install-recommends \
-    bash ca-certificates git less locales procps ripgrep tmux
+    bash ca-certificates git less locales nodejs npm procps python3 python3-pip ripgrep tmux
   apt-get clean
   rm -rf /var/lib/apt/lists/*
   id gjc >/dev/null 2>&1 || useradd --create-home --shell /bin/bash gjc

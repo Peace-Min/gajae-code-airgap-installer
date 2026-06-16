@@ -27,7 +27,7 @@ cd gajae-code-airgap-installer
 
 `install.cmd`는 다음 작업을 자동으로 수행합니다.
 
-1. `release\parts`의 분할 파일 12개를 하나의 설치 실행 파일로 결합합니다.
+1. `release\parts`의 분할 파일 16개를 하나의 설치 실행 파일로 결합합니다.
 2. 결합된 파일의 SHA-256 체크섬을 검증합니다.
 3. 검증에 성공하면 관리자 권한으로 설치 프로그램을 실행합니다.
 4. 설치 화면에서 서버에서 발급받은 API Key를 입력합니다.
@@ -122,12 +122,12 @@ release\assembled\GajaeCodeAirgapSetup.exe
 
 ## 배포 파일 정보
 
-- 분할 파일 수: 12개
-- 전체 설치 파일 크기: 922,439,705 bytes
+- 분할 파일 수: 16개
+- 전체 설치 파일 크기: 1,184,808,985 bytes
 - 전체 설치 파일 SHA-256:
 
 ```text
-49b3c887f437e20154c0d2b52d32134fea2037586a4b8cadbeea31e55f56f467
+376cfafce9a14f22d29bd7c66efe8b43cf38290971a2425b4c87c8987a365e39
 ```
 
 ## 유지보수 및 재빌드

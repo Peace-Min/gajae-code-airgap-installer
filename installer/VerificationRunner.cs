@@ -96,6 +96,7 @@ internal sealed class VerificationRunner
 
     private async Task<VerificationCheck> RunAgentProjectCheckAsync(VerificationPaths paths)
     {
+        var projectWslPath = WslOfflineInstaller.ConvertWindowsPathToWslMountPath(paths.ProjectDirectory);
         var prompt =
             "Read AGENTS.md. Fix the intentional defect. You must create PLAN.md before editing, run bash tests/run.sh, " +
             "and create EVIDENCE.md containing the exact test command and result. Do not use web or browser tools.";
@@ -106,9 +107,9 @@ internal sealed class VerificationRunner
                 "-u", "gjc",
                 "--",
                 "bash", "-lc",
-                "source ~/.config/gajae-code/env; project=$(wslpath \"$1\"); cd \"$project\"; exec gjc --print \"$2\"",
+                "source ~/.config/gajae-code/env; cd \"$1\"; exec gjc --print \"$2\"",
                 "gajaecode-verify",
-                paths.ProjectDirectory,
+                projectWslPath,
                 prompt,
             ],
             paths.ProjectDirectory,
@@ -122,9 +123,9 @@ internal sealed class VerificationRunner
                 "-u", "gjc",
                 "--",
                 "bash", "-lc",
-                "project=$(wslpath \"$1\"); cd \"$project\"; bash tests/run.sh",
+                "cd \"$1\"; bash tests/run.sh",
                 "gajaecode-test",
-                paths.ProjectDirectory,
+                projectWslPath,
             ],
             paths.ProjectDirectory,
             null,

@@ -108,6 +108,8 @@ internal sealed class WslOfflineInstaller
         }
 
         WriteConfigureScript(paths.ConfigureScriptPath);
+        var configureScriptWslPath = ConvertWindowsPathToWslMountPath(paths.ConfigureScriptPath);
+        var linuxBinaryWslPath = ConvertWindowsPathToWslMountPath(paths.LinuxBinaryPath);
         var configureResult = await RunProcessAsync(
             "wsl.exe",
             [
@@ -115,10 +117,10 @@ internal sealed class WslOfflineInstaller
                 "-u", "root",
                 "--",
                 "bash", "-lc",
-                "script=$(wslpath \"$1\"); binary=$(wslpath \"$2\"); exec bash \"$script\" \"$binary\" \"$3\" \"$4\" \"$5\"",
+                "exec bash \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"",
                 "gajaecode-configure",
-                paths.ConfigureScriptPath,
-                paths.LinuxBinaryPath,
+                configureScriptWslPath,
+                linuxBinaryWslPath,
                 gatewayBaseUrl,
                 modelId,
                 providerId,
@@ -395,6 +397,25 @@ internal sealed class WslOfflineInstaller
             @"Software\Microsoft\Windows\CurrentVersion\RunOnce",
             writable: true);
         key?.DeleteValue(RunOnceName, false);
+    }
+
+    internal static string ConvertWindowsPathToWslMountPath(string windowsPath)
+    {
+        var fullPath = Path.GetFullPath(windowsPath);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(root) ||
+            root.Length < 2 ||
+            root[1] != ':' ||
+            !char.IsAsciiLetter(root[0]))
+        {
+            throw new InvalidOperationException($"WSL /mnt 경로로 변환할 수 없는 Windows 경로입니다: {windowsPath}");
+        }
+
+        var drive = char.ToLowerInvariant(root[0]);
+        var relativePath = fullPath[root.Length..]
+            .Replace('\\', '/')
+            .TrimStart('/');
+        return $"/mnt/{drive}/{relativePath}";
     }
 
     private static async Task<ProcessResult> RunProcessAsync(

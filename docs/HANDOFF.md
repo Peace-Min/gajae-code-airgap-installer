@@ -1,6 +1,6 @@
 # Air-Gapped Deployment Handoff
 
-Last updated: 2026-06-15
+Last updated: 2026-06-16
 
 ## Objective
 
@@ -47,6 +47,12 @@ validated WSL2/tmux environment for live team mode.
   still running during an upgrade.
 - Confirmed the bundled WSL kernel MSI has a valid Microsoft signature. The
   GJC Windows binary is currently unsigned.
+- Removed installer and verification reliance on `wslpath`; Windows paths are
+  converted to `/mnt/<drive>/...` before entering WSL so the minimal rootfs does
+  not need `wslu`.
+- Rebuilt the bundled WSL rootfs with `python3`, `python3-pip`, `nodejs`, and
+  `npm`, and verified those tools inside the temporary WSL build distro before
+  export.
 
 ## Current files
 
